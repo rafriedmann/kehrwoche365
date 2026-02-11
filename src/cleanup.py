@@ -110,6 +110,17 @@ def run_cleanup() -> dict:
             item_id = ritem.get("Id", "")
             size = ritem.get("Size", 0)
 
+            deleted_date_str = ritem.get("DeletedDate", "")
+            if deleted_date_str:
+                try:
+                    deleted_date = _parse_datetime(deleted_date_str)
+                    if deleted_date >= cutoff:
+                        logger.debug(f"  Skipping recycle bin item (too recent): {leaf_name}")
+                        continue
+                except Exception:
+                    logger.warning(f"  Could not parse DeletedDate for {leaf_name}, skipping")
+                    continue
+
             logger.info(
                 f"  {'[DRY RUN] Would purge' if dry_run else 'Purging'} from recycle bin: "
                 f"{leaf_name} (size={_format_size(size)}, site={site_name})"
