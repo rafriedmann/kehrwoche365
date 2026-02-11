@@ -26,7 +26,7 @@ def run_cleanup() -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(days=Config.RETENTION_DAYS)
     dry_run = Config.DRY_RUN
 
-    stats = {"files_deleted": 0, "bytes_freed": 0, "recycle_purged": 0, "errors": 0}
+    stats = {"files_deleted": 0, "bytes_freed": 0, "first_stage_purged": 0, "second_stage_purged": 0, "errors": 0}
 
     mode = "DRY RUN" if dry_run else "LIVE"
     logger.info(f"Starting cleanup [{mode}] - retention={Config.RETENTION_DAYS}d, cutoff={cutoff.isoformat()}")
@@ -73,6 +73,12 @@ def run_cleanup() -> dict:
                 if not name.lower().endswith(".mp4"):
                     continue
 
+                # Only delete recordings from the Recordings folder
+                parent_path = item.get("parentReference", {}).get("path", "")
+                if "/Recordings" not in parent_path:
+                    logger.debug(f"  Skipping {name} (not in Recordings folder: {parent_path})")
+                    continue
+
                 created = _parse_datetime(item.get("createdDateTime", ""))
                 size = item.get("size", 0)
                 age_days = (datetime.now(timezone.utc) - created).days
@@ -97,56 +103,106 @@ def run_cleanup() -> dict:
                     stats["files_deleted"] += 1
                     stats["bytes_freed"] += size
 
-        # Step 4: Purge recycle bin recordings
+        # Step 4: Optionally purge 1st stage recycle bin
+        if Config.PURGE_FIRST_STAGE:
+            try:
+                recycle_items = graph.get_recycle_bin_items(site_id)
+            except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code in (403, 404):
+                    logger.debug(f"Skipping 1st stage recycle bin for {site_name} (no access)")
+                else:
+                    logger.warning(f"Failed to fetch 1st stage recycle bin for {site_name}: {e}")
+                    stats["errors"] += 1
+                recycle_items = []
+
+            for ritem in recycle_items:
+                name = ritem.get("name", "")
+                if not name.lower().endswith(".mp4"):
+                    continue
+
+                item_id = ritem.get("id", "")
+                size = ritem.get("size", 0)
+
+                deleted_str = ritem.get("deletedDateTime", "")
+                if deleted_str:
+                    try:
+                        deleted_date = _parse_datetime(deleted_str)
+                        if deleted_date >= cutoff:
+                            logger.debug(f"  Skipping 1st stage item (too recent): {name}")
+                            continue
+                    except Exception:
+                        logger.warning(f"  Could not parse deletedDateTime for {name}, skipping")
+                        continue
+
+                logger.info(
+                    f"  {'[DRY RUN] Would purge' if dry_run else 'Purging'} from 1st stage: "
+                    f"{name} (size={_format_size(size)}, site={site_name})"
+                )
+
+                if not dry_run:
+                    try:
+                        graph.permanent_delete_recycle_bin_item(site_id, item_id)
+                        stats["first_stage_purged"] += 1
+                    except Exception:
+                        logger.exception(f"Failed to purge {name} from 1st stage")
+                        stats["errors"] += 1
+                else:
+                    stats["first_stage_purged"] += 1
+
+        # Step 5: Always purge 2nd stage recycle bin
+        if not site_url:
+            continue
+
         try:
-            recycle_items = graph.get_recycle_bin_items(site_id)
+            second_stage_items = graph.get_second_stage_recycle_bin(site_url)
         except requests.exceptions.HTTPError as e:
-            if e.response is not None and e.response.status_code in (403, 404):
-                logger.debug(f"Skipping recycle bin for site {site_name} (no access)")
+            if e.response is not None and e.response.status_code in (401, 403, 404):
+                logger.debug(f"Skipping 2nd stage recycle bin for {site_name} (no access)")
             else:
-                logger.warning(f"Failed to fetch recycle bin for site {site_name}: {e}")
+                logger.warning(f"Failed to fetch 2nd stage recycle bin for {site_name}: {e}")
                 stats["errors"] += 1
             continue
 
-        for ritem in recycle_items:
-            name = ritem.get("name", "")
-            if not name.lower().endswith(".mp4"):
+        for ritem in second_stage_items:
+            leaf_name = ritem.get("LeafName", "")
+            if not leaf_name.lower().endswith(".mp4"):
                 continue
 
-            item_id = ritem.get("id", "")
-            size = ritem.get("size", 0)
+            item_id = ritem.get("Id", "")
+            size = ritem.get("Size", 0)
 
-            deleted_str = ritem.get("deletedDateTime", "")
-            if deleted_str:
+            deleted_date_str = ritem.get("DeletedDate", "")
+            if deleted_date_str:
                 try:
-                    deleted_date = _parse_datetime(deleted_str)
+                    deleted_date = _parse_datetime(deleted_date_str)
                     if deleted_date >= cutoff:
-                        logger.debug(f"  Skipping recycle bin item (too recent): {name}")
+                        logger.debug(f"  Skipping 2nd stage item (too recent): {leaf_name}")
                         continue
                 except Exception:
-                    logger.warning(f"  Could not parse deletedDateTime for {name}, skipping")
+                    logger.warning(f"  Could not parse DeletedDate for {leaf_name}, skipping")
                     continue
 
             logger.info(
-                f"  {'[DRY RUN] Would purge' if dry_run else 'Purging'} from recycle bin: "
-                f"{name} (size={_format_size(size)}, site={site_name})"
+                f"  {'[DRY RUN] Would purge' if dry_run else 'Purging'} from 2nd stage: "
+                f"{leaf_name} (size={_format_size(size)}, site={site_name})"
             )
 
             if not dry_run:
                 try:
-                    graph.delete_recycle_bin_item(site_id, item_id)
-                    stats["recycle_purged"] += 1
+                    graph.purge_second_stage_item(site_url, item_id)
+                    stats["second_stage_purged"] += 1
                 except Exception:
-                    logger.exception(f"Failed to purge {name} from recycle bin")
+                    logger.exception(f"Failed to purge {leaf_name} from 2nd stage")
                     stats["errors"] += 1
             else:
-                stats["recycle_purged"] += 1
+                stats["second_stage_purged"] += 1
 
     logger.info(
         f"Cleanup complete [{mode}]: "
         f"files_deleted={stats['files_deleted']}, "
         f"bytes_freed={_format_size(stats['bytes_freed'])}, "
-        f"recycle_purged={stats['recycle_purged']}, "
+        f"first_stage_purged={stats['first_stage_purged']}, "
+        f"second_stage_purged={stats['second_stage_purged']}, "
         f"errors={stats['errors']}"
     )
     return stats

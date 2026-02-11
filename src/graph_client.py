@@ -90,8 +90,36 @@ class GraphClient:
         self._delete(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}")
 
     def get_recycle_bin_items(self, site_id: str) -> list[dict]:
-        logger.debug(f"Fetching recycle bin for site {site_id}")
+        logger.debug(f"Fetching 1st stage recycle bin for site {site_id}")
         return self._get_paginated(f"{GRAPH_BETA}/sites/{site_id}/recycleBin/items")
 
-    def delete_recycle_bin_item(self, site_id: str, item_id: str) -> None:
-        self._delete(f"{GRAPH_BETA}/sites/{site_id}/recycleBin/items/{item_id}")
+    def permanent_delete_recycle_bin_item(self, site_id: str, item_id: str) -> None:
+        url = f"{GRAPH_BETA}/sites/{site_id}/recycleBin/items/{item_id}/permanentDelete"
+        resp = requests.post(url, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+
+    def _sp_headers(self) -> dict:
+        sp_scope = f"https://{Config.SHAREPOINT_DOMAIN}/.default"
+        return {
+            "Authorization": f"Bearer {self._get_token(scope=sp_scope)}",
+            "Accept": "application/json;odata=verbose",
+        }
+
+    def get_second_stage_recycle_bin(self, site_url: str) -> list[dict]:
+        logger.debug(f"Fetching 2nd stage recycle bin for {site_url}")
+        items: list[dict] = []
+        url = f"{site_url}/_api/site/recyclebin?$filter=ItemState eq 2&$top=200"
+        while url:
+            resp = requests.get(url, headers=self._sp_headers(), timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("d", {}).get("results", [])
+            items.extend(results)
+            next_link = data.get("d", {}).get("__next")
+            url = next_link if next_link else None
+        return items
+
+    def purge_second_stage_item(self, site_url: str, item_id: str) -> None:
+        url = f"{site_url}/_api/site/recyclebin('{item_id}')"
+        resp = requests.delete(url, headers=self._sp_headers(), timeout=30)
+        resp.raise_for_status()

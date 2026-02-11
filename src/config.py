@@ -15,6 +15,7 @@ class Config:
     RETENTION_DAYS: int = int(os.getenv("RETENTION_DAYS", "8"))
     CRON_SCHEDULE: str = os.getenv("CRON_SCHEDULE", "0 2 * * *")
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
+    PURGE_FIRST_STAGE: bool = os.getenv("PURGE_FIRST_STAGE", "false").lower() in ("true", "1", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 
