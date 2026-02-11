@@ -9,6 +9,7 @@ from .config import Config
 logger = logging.getLogger("recordings-cleanup")
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+GRAPH_BETA = "https://graph.microsoft.com/beta"
 
 
 class GraphClient:
@@ -18,23 +19,22 @@ class GraphClient:
             client_credential=Config.AZURE_CLIENT_SECRET,
             authority=f"https://login.microsoftonline.com/{Config.AZURE_TENANT_ID}",
         )
-        self._token: dict | None = None
-        self._token_expiry: float = 0
+        self._tokens: dict[str, dict] = {}
+        self._token_expiries: dict[str, float] = {}
 
-    def _get_token(self) -> str:
+    def _get_token(self, scope: str = "https://graph.microsoft.com/.default") -> str:
         now = time.time()
-        if self._token and now < self._token_expiry - 60:
-            return self._token["access_token"]
+        cached = self._tokens.get(scope)
+        if cached and now < self._token_expiries.get(scope, 0) - 60:
+            return cached["access_token"]
 
-        result = self._app.acquire_token_for_client(
-            scopes=["https://graph.microsoft.com/.default"]
-        )
+        result = self._app.acquire_token_for_client(scopes=[scope])
         if "access_token" not in result:
             raise RuntimeError(f"Token acquisition failed: {result.get('error_description', result)}")
 
-        self._token = result
-        self._token_expiry = now + result.get("expires_in", 3600)
-        logger.debug("Acquired new access token")
+        self._tokens[scope] = result
+        self._token_expiries[scope] = now + result.get("expires_in", 3600)
+        logger.debug(f"Acquired new access token for {scope}")
         return result["access_token"]
 
     def _headers(self) -> dict:
@@ -88,3 +88,10 @@ class GraphClient:
 
     def delete_item(self, drive_id: str, item_id: str) -> None:
         self._delete(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}")
+
+    def get_recycle_bin_items(self, site_id: str) -> list[dict]:
+        logger.debug(f"Fetching recycle bin for site {site_id}")
+        return self._get_paginated(f"{GRAPH_BETA}/sites/{site_id}/recycleBin/items")
+
+    def delete_recycle_bin_item(self, site_id: str, item_id: str) -> None:
+        self._delete(f"{GRAPH_BETA}/sites/{site_id}/recycleBin/items/{item_id}")

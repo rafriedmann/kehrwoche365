@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime, timezone, timedelta
 
+import requests
+
 from .config import Config
 from .graph_client import GraphClient
-from .sharepoint_client import SharePointClient
 
 logger = logging.getLogger("recordings-cleanup")
 
@@ -22,7 +23,6 @@ def _format_size(size_bytes: int) -> str:
 
 def run_cleanup() -> dict:
     graph = GraphClient()
-    sp = SharePointClient(graph)
     cutoff = datetime.now(timezone.utc) - timedelta(days=Config.RETENTION_DAYS)
     dry_run = Config.DRY_RUN
 
@@ -47,9 +47,12 @@ def run_cleanup() -> dict:
         # Step 2: Get drives for each site
         try:
             drives = graph.get_site_drives(site_id)
-        except Exception:
-            logger.exception(f"Failed to fetch drives for site {site_name}")
-            stats["errors"] += 1
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code in (403, 404):
+                logger.debug(f"Skipping site {site_name} (no access)")
+            else:
+                logger.warning(f"Failed to fetch drives for site {site_name}: {e}")
+                stats["errors"] += 1
             continue
 
         for drive in drives:
@@ -95,43 +98,46 @@ def run_cleanup() -> dict:
                     stats["bytes_freed"] += size
 
         # Step 4: Purge recycle bin recordings
-        if not site_url:
-            continue
-
         try:
-            recycle_items = sp.get_recording_recycle_items(site_url)
-        except Exception:
-            logger.exception(f"Failed to fetch recycle bin for site {site_name}")
-            stats["errors"] += 1
+            recycle_items = graph.get_recycle_bin_items(site_id)
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code in (403, 404):
+                logger.debug(f"Skipping recycle bin for site {site_name} (no access)")
+            else:
+                logger.warning(f"Failed to fetch recycle bin for site {site_name}: {e}")
+                stats["errors"] += 1
             continue
 
         for ritem in recycle_items:
-            leaf_name = ritem.get("LeafName", "")
-            item_id = ritem.get("Id", "")
-            size = ritem.get("Size", 0)
+            name = ritem.get("name", "")
+            if not name.lower().endswith(".mp4"):
+                continue
 
-            deleted_date_str = ritem.get("DeletedDate", "")
-            if deleted_date_str:
+            item_id = ritem.get("id", "")
+            size = ritem.get("size", 0)
+
+            deleted_str = ritem.get("deletedDateTime", "")
+            if deleted_str:
                 try:
-                    deleted_date = _parse_datetime(deleted_date_str)
+                    deleted_date = _parse_datetime(deleted_str)
                     if deleted_date >= cutoff:
-                        logger.debug(f"  Skipping recycle bin item (too recent): {leaf_name}")
+                        logger.debug(f"  Skipping recycle bin item (too recent): {name}")
                         continue
                 except Exception:
-                    logger.warning(f"  Could not parse DeletedDate for {leaf_name}, skipping")
+                    logger.warning(f"  Could not parse deletedDateTime for {name}, skipping")
                     continue
 
             logger.info(
                 f"  {'[DRY RUN] Would purge' if dry_run else 'Purging'} from recycle bin: "
-                f"{leaf_name} (size={_format_size(size)}, site={site_name})"
+                f"{name} (size={_format_size(size)}, site={site_name})"
             )
 
             if not dry_run:
                 try:
-                    sp.purge_recycle_bin_item(site_url, item_id)
+                    graph.delete_recycle_bin_item(site_id, item_id)
                     stats["recycle_purged"] += 1
                 except Exception:
-                    logger.exception(f"Failed to purge {leaf_name} from recycle bin")
+                    logger.exception(f"Failed to purge {name} from recycle bin")
                     stats["errors"] += 1
             else:
                 stats["recycle_purged"] += 1

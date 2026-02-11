@@ -10,16 +10,16 @@ Microsoft 365 Lizenzen wie **Business Basic / Standard** bieten keine Retention 
 
 - Durchsucht alle SharePoint-Sites im Tenant nach `.mp4`-Dateien (Teams-Aufzeichnungen)
 - Löscht Aufzeichnungen, die älter als die konfigurierte Aufbewahrungsfrist sind (Standard: 8 Tage)
-- Leert den SharePoint-Papierkorb, um den Speicher tatsächlich freizugeben
+- Leert den SharePoint-Papierkorb von `.mp4`-Dateien, die älter als die Aufbewahrungsfrist sind
 - Läuft per Cron-Schedule als Docker-Container (Standard: täglich um 2 Uhr)
 - Dry-Run-Modus zum gefahrlosen Testen
 
 ## Voraussetzungen
 
 - Docker & Docker Compose
-- Azure AD App Registration mit folgenden **Application Permissions**:
+- Azure AD App Registration mit folgenden **Application Permissions** (Microsoft Graph):
   - `Sites.ReadWrite.All`
-  - `Sites.FullControl.All` (für Papierkorb-Zugriff)
+  - `Sites.FullControl.All`
 
 ## Quickstart
 
