@@ -39,6 +39,7 @@ class GraphClient:
             logger.info("No certificate configured, 2nd stage recycle bin disabled")
         self._tokens: dict[str, dict] = {}
         self._token_expiries: dict[str, float] = {}
+        self._path_cache: dict[str, str] = {}
 
     def _get_token(self, scope: str = "https://graph.microsoft.com/.default") -> str:
         now = time.time()
@@ -103,6 +104,24 @@ class GraphClient:
         return self._get_paginated(
             f"{GRAPH_BASE}/drives/{drive_id}/root/search(q='{query}')"
         )
+
+    def get_item_path(self, drive_id: str, item_id: str) -> str:
+        """Get the full folder path of an item. Results are cached."""
+        cache_key = f"{drive_id}:{item_id}"
+        if cache_key in self._path_cache:
+            return self._path_cache[cache_key]
+
+        try:
+            data = self._get(
+                f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}",
+                params={"$select": "parentReference"},
+            )
+            path = data.get("parentReference", {}).get("path", "")
+        except Exception:
+            path = ""
+
+        self._path_cache[cache_key] = path
+        return path
 
     def delete_item(self, drive_id: str, item_id: str) -> None:
         self._delete(f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}")

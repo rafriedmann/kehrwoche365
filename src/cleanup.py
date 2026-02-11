@@ -74,9 +74,13 @@ def run_cleanup() -> dict:
                     continue
 
                 # Only delete recordings from the Recordings folder
-                parent_path = item.get("parentReference", {}).get("path", "")
+                parent_ref = item.get("parentReference", {})
+                parent_id = parent_ref.get("id", "")
+                parent_path = parent_ref.get("path", "")
+                if not parent_path and parent_id:
+                    parent_path = graph.get_item_path(drive_id, parent_id)
                 if "/Recordings" not in parent_path:
-                    logger.debug(f"  Skipping {name} (not in Recordings folder: {parent_path})")
+                    logger.debug(f"  Skipping {name} (not in Recordings folder)")
                     continue
 
                 created = _parse_datetime(item.get("createdDateTime", ""))
