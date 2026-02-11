@@ -1,0 +1,10 @@
+services:
+  recordings-cleanup:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import src.config; print('ok')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
