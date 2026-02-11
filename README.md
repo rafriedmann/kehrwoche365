@@ -8,9 +8,10 @@ Microsoft 365 Lizenzen wie **Business Basic / Standard** bieten keine Retention 
 
 ## Was macht er?
 
-- Durchsucht alle SharePoint-Sites im Tenant nach `.mp4`-Dateien (Teams-Aufzeichnungen)
+- Durchsucht alle SharePoint-Sites nach `.mp4`-Dateien im `Recordings`-Ordner
 - Löscht Aufzeichnungen, die älter als die konfigurierte Aufbewahrungsfrist sind (Standard: 8 Tage)
-- Leert den SharePoint-Papierkorb von `.mp4`-Dateien, die älter als die Aufbewahrungsfrist sind
+- Optional: Leert den 1st Stage Papierkorb (permanent delete, überspringt 2nd Stage)
+- Optional: Leert den 2nd Stage Papierkorb von `.mp4`-Dateien (benötigt Zertifikat-Auth)
 - Läuft per Cron-Schedule als Docker-Container (Standard: täglich um 2 Uhr)
 - Dry-Run-Modus zum gefahrlosen Testen
 
@@ -20,6 +21,26 @@ Microsoft 365 Lizenzen wie **Business Basic / Standard** bieten keine Retention 
 - Azure AD App Registration mit folgenden **Application Permissions** (Microsoft Graph):
   - `Sites.ReadWrite.All`
   - `Sites.FullControl.All`
+
+### Zertifikat-Auth (optional, für 2nd Stage Papierkorb)
+
+Die SharePoint REST API akzeptiert keine Client-Secret-Tokens. Für den Zugriff auf den 2nd Stage Papierkorb wird ein Zertifikat benötigt:
+
+1. Zertifikat erstellen:
+
+   ```bash
+   openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes -subj "/CN=kehrwoche365"
+   ```
+
+2. SHA1-Thumbprint auslesen:
+
+   ```bash
+   openssl x509 -in certs/cert.pem -noout -fingerprint -sha1 | sed 's/://g' | cut -d= -f2
+   ```
+
+3. `certs/cert.pem` in Azure AD hochladen (App Registration > Certificates & secrets)
+
+4. `CERT_KEY_PATH` und `CERT_THUMBPRINT` in `.env` setzen
 
 ## Quickstart
 
@@ -52,6 +73,9 @@ Microsoft 365 Lizenzen wie **Business Basic / Standard** bieten keine Retention 
 | `RETENTION_DAYS` | Aufbewahrungsfrist in Tagen | `8` |
 | `CRON_SCHEDULE` | Cron-Ausdruck für Zeitplan | `0 2 * * *` |
 | `DRY_RUN` | Testmodus ohne Löschung | `true` |
+| `PURGE_FIRST_STAGE` | 1st Stage Papierkorb leeren | `false` |
+| `CERT_KEY_PATH` | Pfad zum privaten Schlüssel (PEM) | *leer* |
+| `CERT_THUMBPRINT` | SHA1-Thumbprint des Zertifikats | *leer* |
 | `LOG_LEVEL` | Log-Level (DEBUG/INFO/WARNING/ERROR) | `INFO` |
 
 > **Wichtig:** `DRY_RUN` ist standardmäßig `true`. Erst auf `false` setzen, wenn die Ergebnisse im Log korrekt aussehen.

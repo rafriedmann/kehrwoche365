@@ -16,6 +16,8 @@ class Config:
     CRON_SCHEDULE: str = os.getenv("CRON_SCHEDULE", "0 2 * * *")
     DRY_RUN: bool = os.getenv("DRY_RUN", "true").lower() in ("true", "1", "yes")
     PURGE_FIRST_STAGE: bool = os.getenv("PURGE_FIRST_STAGE", "false").lower() in ("true", "1", "yes")
+    CERT_KEY_PATH: str = os.getenv("CERT_KEY_PATH", "")
+    CERT_THUMBPRINT: str = os.getenv("CERT_THUMBPRINT", "")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 

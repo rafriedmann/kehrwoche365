@@ -3,6 +3,8 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - ./certs:/app/certs:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import src.config; print('ok')"]
       interval: 60s

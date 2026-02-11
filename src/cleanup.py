@@ -149,8 +149,8 @@ def run_cleanup() -> dict:
                 else:
                     stats["first_stage_purged"] += 1
 
-        # Step 5: Always purge 2nd stage recycle bin
-        if not site_url:
+        # Step 5: Purge 2nd stage recycle bin (requires certificate auth)
+        if not site_url or not Config.CERT_KEY_PATH:
             continue
 
         try:

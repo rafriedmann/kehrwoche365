@@ -14,11 +14,29 @@ GRAPH_BETA = "https://graph.microsoft.com/beta"
 
 class GraphClient:
     def __init__(self) -> None:
+        authority = f"https://login.microsoftonline.com/{Config.AZURE_TENANT_ID}"
         self._app = msal.ConfidentialClientApplication(
             client_id=Config.AZURE_CLIENT_ID,
             client_credential=Config.AZURE_CLIENT_SECRET,
-            authority=f"https://login.microsoftonline.com/{Config.AZURE_TENANT_ID}",
+            authority=authority,
         )
+        # Separate MSAL app with certificate auth for SharePoint REST API
+        cert_path = Config.CERT_KEY_PATH
+        if cert_path:
+            with open(cert_path) as f:
+                private_key = f.read()
+            self._sp_app = msal.ConfidentialClientApplication(
+                client_id=Config.AZURE_CLIENT_ID,
+                client_credential={
+                    "private_key": private_key,
+                    "thumbprint": Config.CERT_THUMBPRINT,
+                },
+                authority=authority,
+            )
+            logger.info("Certificate auth enabled for SharePoint REST API")
+        else:
+            self._sp_app = None
+            logger.info("No certificate configured, 2nd stage recycle bin disabled")
         self._tokens: dict[str, dict] = {}
         self._token_expiries: dict[str, float] = {}
 
@@ -98,10 +116,28 @@ class GraphClient:
         resp = requests.post(url, headers=self._headers(), timeout=30)
         resp.raise_for_status()
 
+    def _get_sp_token(self) -> str:
+        if not self._sp_app:
+            raise RuntimeError("Certificate auth not configured")
+        scope = f"https://{Config.SHAREPOINT_DOMAIN}/.default"
+        now = time.time()
+        cache_key = f"sp:{scope}"
+        cached = self._tokens.get(cache_key)
+        if cached and now < self._token_expiries.get(cache_key, 0) - 60:
+            return cached["access_token"]
+
+        result = self._sp_app.acquire_token_for_client(scopes=[scope])
+        if "access_token" not in result:
+            raise RuntimeError(f"SP token acquisition failed: {result.get('error_description', result)}")
+
+        self._tokens[cache_key] = result
+        self._token_expiries[cache_key] = now + result.get("expires_in", 3600)
+        logger.debug("Acquired new SP access token via certificate")
+        return result["access_token"]
+
     def _sp_headers(self) -> dict:
-        sp_scope = f"https://{Config.SHAREPOINT_DOMAIN}/.default"
         return {
-            "Authorization": f"Bearer {self._get_token(scope=sp_scope)}",
+            "Authorization": f"Bearer {self._get_sp_token()}",
             "Accept": "application/json;odata=verbose",
         }
 
